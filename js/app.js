@@ -91,7 +91,7 @@
     legacyDocs: [], legacyMeta: {},
     verifyNotice: '', fatalText: ''
   };
-  var unsubscribe = null, lastSig = null, draftEmail = '';
+  var unsubscribe = null, lastSig = null, draftEmail = '', authMode = null;
 
   function saveError(e) {
     console.error(e);
@@ -130,7 +130,8 @@
   function route(user) {
     if (unsubscribe) { unsubscribe(); unsubscribe = null; }
     state.user = user; state.docs = []; state.loaded = false; lastSig = null;
-    if (!user) { setScreen('login'); return; }
+    if (!user) { authMode = null; setScreen('login'); return; }
+    if (user.emailVerified) rememberLogin();
     if (!user.emailVerified) { setScreen('verify'); return; }
     setScreen('app');
     unsubscribe = storage.subscribe(onDocs, onSubscribeError);
@@ -188,68 +189,123 @@
         state.user ? el('button', { class: 'btn', text: 'Выйти', onclick: doSignOut }) : null)]);
   }
 
-  function renderLogin(message) {
-    var emailIn = el('input', { class: 'input', id: 'authEmail', type: 'email', autocomplete: 'username', inputmode: 'email', placeholder: 'name@mail.ru', value: draftEmail });
-    var passIn = el('input', { class: 'input', id: 'authPassword', type: 'password', autocomplete: 'current-password', placeholder: 'пароль' });
-    var showPass = el('input', { type: 'checkbox', id: 'authShow' });
-    showPass.addEventListener('change', function () { passIn.type = showPass.checked ? 'text' : 'password'; });
-    var errBox = el('div', { class: 'banner banner-error', role: 'alert', id: 'authError', hidden: true });
-    var okBox = el('div', { class: 'banner banner-ok', role: 'status', id: 'authInfo', hidden: !message, text: message || '' });
-    var bIn = el('button', { type: 'submit', class: 'btn btn-primary', id: 'btnSignIn', text: 'Войти' });
-    var bUp = el('button', { type: 'button', class: 'btn', id: 'btnSignUp', text: 'Создать аккаунт' });
-    var bForgot = el('button', { type: 'button', class: 'link', id: 'btnForgot', text: 'Забыли пароль?' });
+  /* Флаг «на этом устройстве уже входили»: по нему выбираем, какую вкладку открыть. */
+  var HAD_LOGIN_KEY = 'neit-upd-had-login';
+  function hadLogin() { try { return localStorage.getItem(HAD_LOGIN_KEY) === '1'; } catch (e) { return false; } }
+  function rememberLogin() { try { localStorage.setItem(HAD_LOGIN_KEY, '1'); } catch (e) { /* хранилище недоступно — не страшно */ } }
+  var MIN_PASSWORD = 6;
+  var HINT_FIRST_TIME = 'Если вы здесь впервые — перейдите на вкладку «Я здесь впервые».';
+  var MSG_EMAIL_TAKEN = 'Эта почта уже зарегистрирована. Нажмите «Войти» или «Забыли пароль?»';
 
-    function fail(text) { errBox.textContent = text; errBox.hidden = false; okBox.hidden = true; }
-    function busy(on) { [bIn, bUp, bForgot].forEach(function (b) { b.disabled = on; }); }
+  /**
+   * Экран входа с двумя вкладками. opts: { mode: 'signin'|'signup', error, info }.
+   * Без opts вкладка выбирается по флагу «уже входили на этом устройстве».
+   */
+  function renderLogin(opts) {
+    opts = opts || {};
+    var mode = opts.mode || authMode || (hadLogin() ? 'signin' : 'signup');
+    authMode = mode;
+    var signup = mode === 'signup';
+
+    var emailIn = el('input', { class: 'input', id: 'authEmail', type: 'email', autocomplete: 'username', inputmode: 'email', placeholder: 'name@mail.ru', value: draftEmail });
+    var passIn = el('input', { class: 'input', id: 'authPassword', type: 'password', autocomplete: signup ? 'new-password' : 'current-password', placeholder: signup ? 'придумайте пароль' : 'пароль' });
+    var pass2In = signup ? el('input', { class: 'input', id: 'authPassword2', type: 'password', autocomplete: 'new-password', placeholder: 'введите тот же пароль ещё раз' }) : null;
+    var showPass = el('input', { type: 'checkbox', id: 'authShow' });
+    showPass.addEventListener('change', function () { var t = showPass.checked ? 'text' : 'password'; passIn.type = t; if (pass2In) pass2In.type = t; });
+    var errBox = el('div', { class: 'banner banner-error', role: 'alert', id: 'authError', hidden: !opts.error, text: opts.error || '' });
+    var okBox = el('div', { class: 'banner banner-ok', role: 'status', id: 'authInfo', hidden: !opts.info, text: opts.info || '' });
+    var tipBox = el('div', { class: 'banner banner-warn', id: 'authTip', hidden: true, text: HINT_FIRST_TIME });
+    var bSubmit = el('button', { type: 'submit', class: 'btn btn-primary btn-big', id: signup ? 'btnSignUp' : 'btnSignIn', text: signup ? 'Создать пароль и получить письмо' : 'Войти' });
+    var bForgot = signup ? null : el('button', { type: 'button', class: 'link', id: 'btnForgot', text: 'Забыли пароль?' });
+    var bSwitch = el('button', { type: 'button', class: 'link', id: 'btnSwitch', text: signup ? 'Уже есть пароль? Войти' : 'Первый раз здесь? Создать пароль' });
+    bSwitch.addEventListener('click', function () { draftEmail = emailIn.value.trim(); showLogin(signup ? 'signin' : 'signup'); });
+
+    function tab(id, m, text) {
+      var b = el('button', { type: 'button', class: 'auth-tab', id: id, role: 'tab', 'aria-selected': String(mode === m), text: text });
+      b.addEventListener('click', function () { if (mode !== m) { draftEmail = emailIn.value.trim(); showLogin(m); } });
+      return b;
+    }
+    var tabs = el('div', { class: 'auth-tabs', role: 'tablist', 'aria-label': 'Вход или первая регистрация' },
+      tab('tabSignIn', 'signin', 'Я уже зарегистрирован(а) — войти'),
+      tab('tabSignUp', 'signup', 'Я здесь впервые — создать пароль'));
+
+    function fail(text, tip) { errBox.textContent = text; errBox.hidden = false; okBox.hidden = true; tipBox.hidden = !tip; }
+    function busy(on) { [bSubmit, bForgot, bSwitch].forEach(function (b) { if (b) b.disabled = on; }); }
     function readEmail() {
       draftEmail = emailIn.value.trim();
-      emailIn.classList.remove('invalid'); passIn.classList.remove('invalid');
+      [emailIn, passIn, pass2In].forEach(function (i) { if (i) i.classList.remove('invalid'); });
       if (!draftEmail) { emailIn.classList.add('invalid'); emailIn.focus(); fail('Введите адрес почты.'); return null; }
       if (!EMAIL_RE.test(draftEmail)) { emailIn.classList.add('invalid'); emailIn.focus(); fail('Адрес почты написан неправильно. Пример: name@mail.ru'); return null; }
-      errBox.hidden = true;
+      errBox.hidden = true; tipBox.hidden = true;
       return draftEmail;
     }
-    function run(promise, onOk) {
+    function run(promise, onOk, onFail) {
       busy(true);
       promise.then(function (r) { busy(false); if (onOk) onOk(r); }, function (e) {
         busy(false);
-        if (e && e.accountCreated) { state.verifyNotice = 'Аккаунт создан, но письмо отправить не удалось. ' + window.NeitFirebaseAdapter.explainError(e, 'auth') + ' Нажмите «Отправить письмо ещё раз».'; if (state.screen === 'verify') setScreen('verify'); return; }
+        if (e && e.accountCreated) { state.verifyNotice = 'Пароль создан, но письмо отправить не удалось. ' + window.NeitFirebaseAdapter.explainError(e, 'auth') + ' Нажмите «Отправить письмо ещё раз».'; if (state.screen === 'verify') setScreen('verify'); return; }
+        if (onFail && onFail(e)) return;
         fail(window.NeitFirebaseAdapter.explainError(e, 'auth'));
       });
     }
 
+    var steps = signup ? el('ol', { class: 'auth-steps', id: 'authSteps' },
+      el('li', { text: 'Введите свою рабочую почту и придумайте пароль, минимум ' + MIN_PASSWORD + ' символов. Запомните или запишите его.' }),
+      el('li', { text: 'Нажмите «Создать пароль и получить письмо», затем откройте письмо от Firebase (проверьте «Спам») и нажмите ссылку внутри.' }),
+      el('li', { text: 'Вернитесь на сайт и нажмите «Я подтвердил(а) почту».' })) : null;
+
     var form = el('form', { novalidate: true, id: 'authForm' },
-      okBox, errBox,
-      el('div', { class: 'field' }, el('label', { for: 'authEmail', text: 'Почта' }), emailIn),
-      el('div', { class: 'field' }, el('label', { for: 'authPassword', text: 'Пароль' }), passIn,
-        el('label', { class: 'check', for: 'authShow' }, showPass, 'Показать пароль')),
-      el('div', { class: 'btn-row' }, bIn, bUp),
-      el('p', null, bForgot),
-      el('p', { class: 'hint', text: 'Войти могут только сотрудники, чья почта добавлена в список. Если вы здесь впервые: нажмите «Создать аккаунт», подтвердите почту по ссылке из письма и сообщите Андрею, какую почту вы указали — он добавит её в список.' }));
+      okBox, errBox, tipBox,
+      el('div', { class: 'field' }, el('label', { for: 'authEmail', text: signup ? 'Ваша рабочая почта' : 'Почта' }), emailIn),
+      el('div', { class: 'field' }, el('label', { for: 'authPassword', text: signup ? 'Придумайте пароль' : 'Пароль' }), passIn),
+      signup ? el('div', { class: 'field' }, el('label', { for: 'authPassword2', text: 'Повторите пароль' }), pass2In) : null,
+      el('label', { class: 'check', for: 'authShow' }, showPass, 'Показать пароль'),
+      el('div', { class: 'btn-row' }, bSubmit),
+      el('p', { class: 'auth-links' }, bForgot, bSwitch));
 
     form.addEventListener('submit', function (ev) {
       ev.preventDefault();
       var email = readEmail(); if (!email) return;
-      if (!passIn.value) { passIn.classList.add('invalid'); passIn.focus(); fail('Введите пароль.'); return; }
-      run(storage.signIn(email, passIn.value));
-    });
-    bUp.addEventListener('click', function () {
-      var email = readEmail(); if (!email) return;
-      if (passIn.value.length < 8) { passIn.classList.add('invalid'); passIn.focus(); fail('Придумайте пароль: не меньше 8 символов.'); return; }
+      if (!passIn.value) { passIn.classList.add('invalid'); passIn.focus(); fail(signup ? 'Придумайте пароль.' : 'Введите пароль.'); return; }
+      if (!signup) {
+        run(storage.signIn(email, passIn.value), null, function (e) {
+          var code = e && e.code ? String(e.code) : '';
+          if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found' || code === 'auth/invalid-login-credentials') {
+            fail(window.NeitFirebaseAdapter.explainError(e, 'auth'), true); return true;
+          }
+          return false;
+        });
+        return;
+      }
+      if (passIn.value.length < MIN_PASSWORD) { passIn.classList.add('invalid'); passIn.focus(); fail('Пароль слишком короткий: нужно не меньше ' + MIN_PASSWORD + ' символов.'); return; }
+      if (passIn.value !== pass2In.value) { pass2In.classList.add('invalid'); pass2In.focus(); fail('Пароли не совпадают. Введите один и тот же пароль дважды.'); return; }
       state.verifyNotice = '';
       run(storage.signUp(email, passIn.value), function () {
         state.verifyNotice = 'Мы отправили письмо на ' + email + '.';
         if (state.screen === 'verify') setScreen('verify');
+      }, function (e) {
+        if (e && String(e.code) === 'auth/email-already-in-use') { showLogin('signin', { error: MSG_EMAIL_TAKEN }); return true; }
+        return false;
       });
     });
-    bForgot.addEventListener('click', function () {
+    if (bForgot) bForgot.addEventListener('click', function () {
       var email = readEmail(); if (!email) return;
       run(storage.resetPassword(email), function () {
         okBox.textContent = 'Если эта почта зарегистрирована, мы отправили на неё письмо со ссылкой для нового пароля. Проверьте и папку «Спам».';
         okBox.hidden = false;
       });
     });
-    return authCard('Вход', [form]);
+    return el('div', { class: 'card auth-card', id: 'authCard', 'data-mode': mode },
+      tabs,
+      el('h2', { id: 'authTitle', text: signup ? 'Первый вход: создайте пароль' : 'Вход' }),
+      steps, form);
+  }
+
+  /** Перерисовывает экран входа на нужной вкладке. */
+  function showLogin(mode, opts) {
+    authMode = mode;
+    var box = $('#authScreen');
+    box.replaceChildren(renderLogin(Object.assign({ mode: mode }, opts)));
   }
 
   function renderVerify() {
@@ -293,7 +349,7 @@
     } });
     return authCard('Нет доступа', [
       el('div', { class: 'banner banner-error', role: 'alert', id: 'deniedText', text: 'Нет доступа: ваш email не в списке разрешённых.' }),
-      el('p', null, 'Вы вошли как ', el('b', { text: email }), '. Сообщите Андрею эту почту — он добавит её в список. После этого нажмите «Проверить ещё раз».'),
+      el('p', null, 'Вы вошли как ', el('b', { text: email }), '. Эта почта не входит в список разрешённых. Если вы вошли не под той почтой — выйдите и войдите под другой.'),
       msg,
       el('div', { class: 'btn-row' }, bRetry, el('button', { class: 'btn', id: 'btnLogoutDenied', text: 'Выйти и войти под другой почтой', onclick: doSignOut }))]);
   }

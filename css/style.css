@@ -209,3 +209,19 @@ summary { cursor: pointer; font-weight: 600; min-height: 36px; padding: 6px 0; }
 #migrateBanner .btn-row { margin-top: 8px; }
 .footer p { margin: 2px 0; }
 @media print { .status-bar, #migrateBox { display: none !important; } }
+
+/* Экран входа: две крупные вкладки «войти / впервые» */
+.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+.auth-tab {
+  min-height: 64px; padding: 8px 10px; border: 2px solid var(--primary); border-radius: 12px; background: transparent; color: var(--primary);
+  font: inherit; font-weight: 700; font-size: 1rem; line-height: 1.25; cursor: pointer;
+}
+.auth-tab:hover { background: var(--primary-soft); }
+.auth-tab[aria-selected="true"] { background: var(--primary); color: var(--primary-text); }
+.auth-tab:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+.auth-steps { background: var(--primary-soft); border-radius: var(--radius); padding: 12px 14px 12px 2em; margin: 8px 0 14px; }
+.auth-steps li { margin: 6px 0; }
+.btn-big { min-height: 56px; font-size: 1.05rem; font-weight: 700; }
+.auth-links { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; margin-top: 14px; }
+.auth-links .link { min-height: 40px; color: var(--primary); }
+.auth-card .check { min-height: 40px; }

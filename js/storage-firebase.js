@@ -58,7 +58,7 @@
     if (code === 'permission-denied' || code === 'firestore/permission-denied') {
       return context === 'write'
         ? 'Запись не принята базой: у вас нет доступа (ваш email не в списке разрешённых или почта не подтверждена) либо данные не прошли проверку.'
-        : 'Нет доступа: ваш email не в списке разрешённых. Попросите Андрея добавить вашу почту.';
+        : 'Нет доступа: ваш email не в списке разрешённых.';
     }
     if (code === 'unauthenticated') return 'Вход устарел. Выйдите и войдите снова.';
     if (code === 'resource-exhausted') return 'База временно не принимает запросы (превышен лимит). Попробуйте позже.';
@@ -66,12 +66,12 @@
       case 'auth/invalid-email': return 'Адрес почты написан неправильно. Пример: name@mail.ru';
       case 'auth/missing-email': return 'Введите адрес почты.';
       case 'auth/missing-password': return 'Введите пароль.';
-      case 'auth/weak-password': return 'Пароль слишком простой. Нужно не меньше 8 символов.';
-      case 'auth/email-already-in-use': return 'Эта почта уже зарегистрирована. Нажмите «Войти» (или «Забыли пароль?»).';
+      case 'auth/weak-password': return 'Пароль слишком простой. Нужно не меньше 6 символов.';
+      case 'auth/email-already-in-use': return 'Эта почта уже зарегистрирована. Нажмите «Войти» или «Забыли пароль?»';
       case 'auth/invalid-credential':
       case 'auth/wrong-password':
       case 'auth/user-not-found':
-      case 'auth/invalid-login-credentials': return 'Неверная почта или пароль. Проверьте и попробуйте ещё раз. Если вы не регистрировались — нажмите «Создать аккаунт».';
+      case 'auth/invalid-login-credentials': return 'Неверная почта или пароль. Проверьте и попробуйте ещё раз.';
       case 'auth/too-many-requests': return 'Слишком много попыток. Подождите несколько минут и попробуйте снова.';
       case 'auth/user-disabled': return 'Этот аккаунт отключён. Обратитесь к Андрею.';
       case 'auth/operation-not-allowed': return 'Вход по почте и паролю выключен в настройках проекта. Сообщите Андрею.';

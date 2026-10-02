@@ -374,7 +374,9 @@ test('explainError: понятные русские сообщения', () => {
   assert.ok(/Нет связи/.test(x('auth/network-request-failed', 'auth')));
   assert.ok(/Неверная почта или пароль/.test(x('auth/invalid-credential', 'auth')));
   assert.ok(/уже зарегистрирована/.test(x('auth/email-already-in-use', 'auth')));
-  assert.ok(/не меньше 8/.test(x('auth/weak-password', 'auth')));
+  assert.ok(/не меньше 6/.test(x('auth/weak-password', 'auth')));
+  assert.ok(!/Андре/.test(x('permission-denied', 'read')), 'нейтральное «Нет доступа» без отсылок к Андрею');
+  assert.ok(!/Создать аккаунт/.test(x('auth/invalid-credential', 'auth')));
   assert.ok(/Слишком много/.test(x('auth/too-many-requests', 'auth')));
   assert.ok(/не прошли проверку/.test(x('permission-denied', 'write')));
   assert.ok(/Что-то пошло не так/.test(x('weird', 'auth')));
@@ -384,6 +386,26 @@ test('SDK Firebase закреплён на версии 11.x и грузится
   const src = require('fs').readFileSync(__dirname + '/../js/storage-firebase.js', 'utf8');
   const urls = src.match(/https?:\/\/[^\s'"]+/g) || [];
   urls.forEach(u => assert.ok(/^https:\/\/www\.gstatic\.com\/firebasejs\//.test(u) || /^https?:\/\/(\.\.)?$/.test(u), 'внешний адрес: ' + u));
+});
+
+console.log('Экран входа и версия');
+test('Экран входа: две вкладки, инструкция из 3 шагов, нет старых текстов', () => {
+  const app = require('fs').readFileSync(__dirname + '/../js/app.js', 'utf8');
+  [ 'Я уже зарегистрирован(а) — войти', 'Я здесь впервые — создать пароль', 'Первый вход: создайте пароль',
+    'Создать пароль и получить письмо', 'Повторите пароль', 'Уже есть пароль? Войти', 'Первый раз здесь? Создать пароль',
+    'Забыли пароль?', 'Показать пароль', 'Если вы здесь впервые — перейдите на вкладку «Я здесь впервые»',
+    'Эта почта уже зарегистрирована. Нажмите «Войти» или «Забыли пароль?»', 'neit-upd-had-login'
+  ].forEach(t => assert.ok(app.includes(t), 'нет текста: ' + t));
+  assert.ok(!/сообщите Андрею, какую почту/i.test(app), 'старый текст про список убран с экрана входа');
+  assert.ok(!app.includes('Создать аккаунт'));
+});
+test('Версия сайта одинакова в index.html и firebase-config.js', () => {
+  const cfg = require('fs').readFileSync(__dirname + '/../js/firebase-config.js', 'utf8');
+  const html = require('fs').readFileSync(__dirname + '/../index.html', 'utf8');
+  const v = (cfg.match(/NEIT_APP_VERSION = '([\d.]+)'/) || [])[1];
+  eq(v, '1.1.1');
+  eq((html.match(/name="app-version" content="([\d.]+)"/) || [])[1], v);
+  (html.match(/\?v=[\d.]+/g) || []).forEach(m => eq(m, '?v=' + v));
 });
 
 console.log('Правила безопасности и репозиторий');

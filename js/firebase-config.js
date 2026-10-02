@@ -14,4 +14,4 @@ window.NEIT_FIREBASE_CONFIG = {
 };
 
 /* Версия сайта: показывается внизу страницы, меняется при каждом выпуске (и в ?v= у скриптов в index.html). */
-window.NEIT_APP_VERSION = '1.1.0';
+window.NEIT_APP_VERSION = '1.1.1';
