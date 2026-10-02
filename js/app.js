@@ -606,7 +606,7 @@
 
   function docCard(d) {
     var c = Core.calcDoc(d);
-    var rates = Object.keys(c.byRate).map(function (k) { return Core.rateLabel(k) + ': НДС ' + Core.formatMoney(c.byRate[k].vat); }).join(' · ');
+    var rateKeys = Object.keys(c.byRate);
     return el('div', { class: 'doc', 'data-id': d.id },
       el('div', { class: 'doc-top' },
         el('span', { class: 'doc-title', text: '№ ' + d.number + ' от ' + Core.formatDate(d.date) }),
@@ -615,7 +615,9 @@
         el('div', null, el('span', { class: 'k', text: 'Без НДС' }), el('span', { class: 'v', text: money(c.net) })),
         el('div', null, el('span', { class: 'k', text: 'НДС' }), el('span', { class: 'v', text: money(c.vat) })),
         el('div', null, el('span', { class: 'k', text: 'Итого' }), el('span', { class: 'v', text: money(c.gross) }))),
-      el('div', { class: 'doc-lines', text: (d.lines.length > 1 ? 'Строк: ' + d.lines.length + ' · ' : '') + rates }),
+      el('div', { class: 'doc-lines' },
+        d.lines.length > 1 ? el('span', { class: 'doc-lines-count', text: 'Строк: ' + d.lines.length }) : null,
+        rateKeys.map(function (k) { return el('span', { class: 'rate-badge', text: Core.rateLabel(k) + ': НДС ' + Core.formatMoney(c.byRate[k].vat) }); })),
       el('div', { class: 'doc-actions' },
         el('button', { class: 'btn btn-small', text: 'Изменить', onclick: function () { openForm(d.type, d); } }),
         el('button', { class: 'btn btn-small btn-danger', text: 'Удалить', onclick: function () { deleteDoc(d); } })));

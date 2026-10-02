@@ -410,7 +410,7 @@ test('Версия сайта одинакова в index.html и firebase-confi
   const cfg = require('fs').readFileSync(__dirname + '/../js/firebase-config.js', 'utf8');
   const html = require('fs').readFileSync(__dirname + '/../index.html', 'utf8');
   const v = (cfg.match(/NEIT_APP_VERSION = '([\d.]+)'/) || [])[1];
-  eq(v, '1.1.2');
+  eq(v, '1.2.0');
   eq((html.match(/name="app-version" content="([\d.]+)"/) || [])[1], v);
   (html.match(/\?v=[\d.]+/g) || []).forEach(m => eq(m, '?v=' + v));
 });
