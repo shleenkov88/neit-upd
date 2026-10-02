@@ -1,0 +1,83 @@
+rules_version = '2';
+
+// Правила базы УПД ООО «Нейт». НЕ публикуются автоматически — их вставляет владелец проекта:
+//   Firebase Console → Firestore Database → Правила (Rules) → вставить содержимое файла → Опубликовать.
+//
+// ЧТО РАЗРЕШЕНО: читать и менять коллекцию «upd» может только тот, кто
+//   1) вошёл на сайте,
+//   2) подтвердил свою почту (перешёл по ссылке из письма),
+//   3) чья почта есть в списке allowedEmails ниже.
+// ВСЁ ОСТАЛЬНОЕ ЗАПРЕЩЕНО.
+//
+// !!! ПОКА В СПИСКЕ СТОЯТ ЗАГЛУШКИ ПОЧТА_1, ПОЧТА_2, ПОЧТА_3 — НИКТО НЕ ПОЛУЧИТ ДОСТУП. !!!
+// Замените их на настоящие адреса (маленькими буквами, в кавычках, через запятую), например:
+//   ['natasha@mail.ru', 'nastya@gmail.com', 'andrey@example.ru']
+// Адрес нужно написать ТОЧНО так, как человек регистрировался, но строчными буквами:
+// Firebase хранит почту в нижнем регистре.
+// Чтобы добавить человека — допишите адрес в список и снова нажмите «Опубликовать». Чтобы убрать — удалите адрес.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function allowedEmails() {
+      return ['ПОЧТА_1', 'ПОЧТА_2', 'ПОЧТА_3'];
+    }
+
+    function isAllowedUser() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in allowedEmails();
+    }
+
+    // Одна строка УПД: сумма в копейках, ставка из списка, НДС вручную — число или пусто.
+    function validLine(l) {
+      return l is map
+        && l.keys().hasOnly(['amount', 'rate', 'vat'])
+        && l.keys().hasAll(['amount', 'rate'])
+        && l.amount is int && l.amount >= -100000000000000 && l.amount <= 100000000000000
+        && l.rate is string && l.rate in ['22', '15', '10', '5', '0', 'none']
+        && (!('vat' in l) || l.vat == null || (l.vat is int && l.vat >= -100000000000000 && l.vat <= 100000000000000));
+    }
+
+    // В языке правил нет циклов, поэтому проверяем размер списка и первые строки;
+    // содержимое всех строк дополнительно проверяет сам сайт перед сохранением.
+    function validLines(lines) {
+      return lines is list && lines.size() >= 1 && lines.size() <= 200
+        && validLine(lines[0])
+        && (lines.size() < 2 || validLine(lines[1]))
+        && (lines.size() < 3 || validLine(lines[2]))
+        && (lines.size() < 4 || validLine(lines[3]))
+        && (lines.size() < 5 || validLine(lines[4]))
+        && (lines.size() < 6 || validLine(lines[5]));
+    }
+
+    function validUpd(d, docId) {
+      return d is map
+        && d.keys().hasOnly(['id', 'type', 'date', 'number', 'partner', 'inn', 'mode', 'lines', 'createdAt', 'updatedAt', 'updatedBy'])
+        && d.keys().hasAll(['id', 'type', 'date', 'number', 'partner', 'inn', 'mode', 'lines', 'updatedAt', 'updatedBy'])
+        && d.id is string && d.id == docId
+        && d.type in ['sale', 'purchase']
+        && d.date is string && d.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && d.number is string && d.number.size() >= 1 && d.number.size() <= 100
+        && d.partner is string && d.partner.size() >= 1 && d.partner.size() <= 300
+        && d.inn is string && d.inn.size() <= 20
+        && d.mode in ['net', 'gross']
+        && validLines(d.lines)
+        && (!('createdAt' in d) || d.createdAt == null || (d.createdAt is string && d.createdAt.size() <= 40))
+        && d.updatedAt is string && d.updatedAt.size() <= 40
+        // кто сохранил — всегда настоящая почта вошедшего (подделать нельзя)
+        && d.updatedBy is string && d.updatedBy == request.auth.token.email;
+    }
+
+    match /upd/{docId} {
+      allow read: if isAllowedUser();
+      allow create, update: if isAllowedUser() && validUpd(request.resource.data, docId);
+      allow delete: if isAllowedUser();
+    }
+
+    // Всё остальное запрещено.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

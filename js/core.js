@@ -253,12 +253,17 @@
     if (!isISODate(doc.date)) errors.date = 'Укажите дату УПД.';
     if (!cleanText(doc.number)) errors.number = 'Укажите номер УПД.';
     if (!cleanText(doc.partner)) errors.partner = 'Укажите, кто контрагент (название организации).';
+    // лимиты длины совпадают с правилами базы (firestore.rules)
+    if (cleanText(doc.number).length > 100) errors.number = 'Номер УПД слишком длинный (не больше 100 знаков).';
+    if (cleanText(doc.partner).length > 300) errors.partner = 'Название контрагента слишком длинное (не больше 300 знаков).';
+    if (doc.lines && doc.lines.length > 200) errors.lines = 'Слишком много строк в одном УПД (не больше 200).';
     if (!doc.lines || !doc.lines.length) errors.lines = 'Добавьте хотя бы одну строку с суммой.';
     (doc.lines || []).forEach(function (l, i) {
       if (!Number.isInteger(l.amount)) errors['line-' + i] = 'Введите сумму цифрами, например 108196,72';
       else if (l.amount === 0) errors['line-' + i] = 'Сумма не может быть нулевой.';
       else if (!rateInfo(l.rate)) errors['line-' + i] = 'Выберите ставку НДС.';
     });
+    if (String(doc.inn == null ? '' : doc.inn).replace(/\s/g, '').length > 20) errors.inn = 'ИНН слишком длинный — проверьте, это должно быть 10 или 12 цифр.';
     var inn = checkInn(doc.inn);
     if (inn === 'format') warnings.push('ИНН должен состоять из 10 цифр (организация) или 12 цифр (ИП). Проверьте, пожалуйста.');
     if (inn === 'checksum') warnings.push('Контрольная цифра ИНН не сходится — возможно, опечатка. Сохранить можно, но лучше проверить.');
@@ -289,8 +294,25 @@
       mode: raw.mode === 'gross' ? 'gross' : 'net',
       lines: lines,
       createdAt: raw.createdAt || null,
-      updatedAt: raw.updatedAt || null
+      updatedAt: raw.updatedAt || null,
+      updatedBy: typeof raw.updatedBy === 'string' ? raw.updatedBy : ''
     };
+  }
+
+  /**
+   * Что можно добавить в общую базу без дублей.
+   * existing — УПД, которые уже есть; incoming — кандидаты (с другого устройства, из копии).
+   * Дубль — тот же id ИЛИ тот же вид + дата + номер + контрагент. Возвращает { fresh: [...], duplicates: число }.
+   */
+  function planMerge(existing, incoming) {
+    var ids = {}, keys = {}, fresh = [], dups = 0;
+    existing.forEach(function (d) { ids[d.id] = true; keys[d.type + '|' + docKey(d)] = true; });
+    incoming.forEach(function (d) {
+      var k = d.type + '|' + docKey(d);
+      if (ids[d.id] || keys[k]) { dups++; return; }
+      ids[d.id] = true; keys[k] = true; fresh.push(d);
+    });
+    return { fresh: fresh, duplicates: dups };
   }
 
   /* ---------------------------------------------------------------------
@@ -359,7 +381,7 @@
     parseDate: parseDate, isISODate: isISODate, formatDate: formatDate, todayISO: todayISO,
     quarterOf: quarterOf, currentQuarter: currentQuarter, quarterRangeText: quarterRangeText, monthName: monthName,
     checkInn: checkInn,
-    newId: newId, cleanText: cleanText, docKey: docKey, validateDoc: validateDoc, normalizeDoc: normalizeDoc,
+    newId: newId, cleanText: cleanText, docKey: docKey, validateDoc: validateDoc, normalizeDoc: normalizeDoc, planMerge: planMerge,
     docsInQuarter: docsInQuarter, summarize: summarize
   };
 }));

@@ -198,3 +198,14 @@ summary { cursor: pointer; font-weight: 600; min-height: 36px; padding: 6px 0; }
   .print-only { display: block; }
   .card { box-shadow: none; break-inside: avoid; }
 }
+
+/* ---------- Вход и общая база ---------- */
+.auth-card { max-width: 480px; margin: 18px auto; }
+.auth-card .btn-row { margin: 12px 0 4px; }
+.auth-card ol { padding-left: 1.3em; }
+.check { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: .9rem; color: var(--muted); }
+.check input { width: 20px; height: 20px; }
+.status-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+#migrateBanner .btn-row { margin-top: 8px; }
+.footer p { margin: 2px 0; }
+@media print { .status-bar, #migrateBox { display: none !important; } }

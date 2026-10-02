@@ -256,6 +256,9 @@
         inn: inn, mode: 'net', lines: g.recs.map(function (r) { return r.line; }),
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
       };
+      var limits = Core.validateDoc(item.doc).errors;            // длины полей — как в правилах базы
+      var limitMsgs = ['number', 'partner', 'inn', 'lines'].filter(function (k) { return limits[k]; }).map(function (k) { return limits[k]; });
+      if (limitMsgs.length) { item.status = 'error'; item.errors = item.errors.concat(limitMsgs); counts.error++; return item; }
       if (existingKeys[g.key]) { item.status = 'duplicate'; item.errors.push('такой УПД уже есть в списке (дата, номер и контрагент совпадают)'); counts.duplicate++; }
       else counts.ok++;
       return item;

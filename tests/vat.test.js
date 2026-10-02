@@ -274,6 +274,144 @@ test('LocalStorageAdapter: недоступный localStorage → работа�
     .catch(e => { failed++; passed--; console.log('  FAIL storage fallback: ' + e.message); });
 });
 
+
+console.log('Перенос и дубли');
+test('planMerge: пропускает тот же id и тот же вид+дата+номер+контрагент', () => {
+  const mk = (id, type, number) => ({ id, type, date: '2026-09-25', number, partner: 'ООО Ромашка' });
+  const existing = [mk('a', 'sale', '1')];
+  const incoming = [mk('a', 'sale', '1'), mk('b', 'sale', ' 1 '), mk('c', 'purchase', '1'), mk('d', 'sale', '2'), mk('e', 'sale', '2')];
+  const r = Core.planMerge(existing, incoming);
+  eq(r.fresh.map(d => d.id).join(), 'c,d'); eq(r.duplicates, 3);
+});
+test('validateDoc: лимиты длины как в правилах базы', () => {
+  const base = { date: '2026-01-01', number: '1', partner: 'X', inn: '', lines: [{ amount: 100, rate: '22' }] };
+  eq(Object.keys(Core.validateDoc(base).errors).length, 0);
+  assert.ok(Core.validateDoc(Object.assign({}, base, { number: 'x'.repeat(101) })).errors.number);
+  assert.ok(Core.validateDoc(Object.assign({}, base, { partner: 'x'.repeat(301) })).errors.partner);
+  assert.ok(Core.validateDoc(Object.assign({}, base, { inn: '1'.repeat(21) })).errors.inn);
+});
+test('normalizeDoc сохраняет updatedBy', () => {
+  const d = Core.normalizeDoc({ id: 'q', type: 'sale', date: '2026-01-01', lines: [{ amount: 1, rate: '22' }], updatedBy: 'a@b.ru' });
+  eq(d.updatedBy, 'a@b.ru');
+});
+
+console.log('Адаптер общей базы (Firebase) на подделке SDK');
+const FbAdapter = require('../js/storage-firebase.js');
+function fakeSdk() {
+  const db = { docs: {}, commits: [], listeners: [] };
+  const user = { uid: 'u1', email: 'natasha@example.ru', emailVerified: true };
+  const calls = [];
+  const sdk = {
+    app: { initializeApp: c => ({ cfg: c }) },
+    auth: {
+      getAuth: () => ({ currentUser: null, languageCode: null }),
+      onAuthStateChanged: (a, cb) => { cb(a.currentUser); return () => {}; },
+      signInWithEmailAndPassword: (a, e, p) => { calls.push(['signIn', e]); a.currentUser = user; return Promise.resolve({ user }); },
+      createUserWithEmailAndPassword: (a, e) => { calls.push(['create', e]); const u = Object.assign({}, user, { email: e, emailVerified: false }); a.currentUser = u; return Promise.resolve({ user: u }); },
+      sendEmailVerification: u => { calls.push(['verify', u.email]); return Promise.resolve(); },
+      sendPasswordResetEmail: (a, e) => { calls.push(['reset', e]); return Promise.resolve(); },
+      signOut: a => { a.currentUser = null; return Promise.resolve(); }
+    },
+    fs: {
+      initializeFirestore: () => db,
+      collection: (d, n) => ({ name: n }),
+      doc: (d, n, id) => ({ name: n, id }),
+      getDocs: () => Promise.resolve({ docs: Object.keys(db.docs).map(id => ({ id, data: () => db.docs[id] })) }),
+      onSnapshot: (col, opts, ok, err) => { db.listeners.push({ ok, err }); ok({ docs: Object.keys(db.docs).map(id => ({ id, data: () => db.docs[id] })), metadata: { fromCache: false, hasPendingWrites: false } }); return () => {}; },
+      writeBatch: () => { const ops = []; return { set: (r, v) => ops.push(['set', r.id, v]), delete: r => ops.push(['del', r.id]),
+        commit: () => { db.commits.push(ops.length); ops.forEach(o => { if (o[0] === 'set') db.docs[o[1]] = o[2]; else delete db.docs[o[1]]; }); return Promise.resolve(); } }; }
+    }
+  };
+  return { sdk, db, user, calls };
+}
+const mkDoc = i => ({ id: 'id' + i, type: 'sale', date: '2026-09-25', number: String(i), partner: 'P', inn: '', mode: 'net', lines: [{ amount: 100, rate: '22', vat: null }], createdAt: null, updatedAt: null, extra: 'не должно попасть в базу' });
+
+test('Firebase-адаптер: put пишет updatedAt/updatedBy, только известные поля; getAll и remove', () => {
+  const f = fakeSdk();
+  const a = new FbAdapter({ projectId: 'x' }, { loadSdk: () => Promise.resolve(f.sdk), now: () => '2026-10-02T10:00:00.000Z', storage: null });
+  return a.init().then(() => a.put(mkDoc(1))).then(() => { assert.fail('без входа записать нельзя'); }, e => eq(e.code, 'unauthenticated'))
+    .then(() => a.signIn('natasha@example.ru', 'x'))
+    .then(() => a.put(mkDoc(1))).then(() => {
+      const r = f.db.docs.id1;
+      eq(r.updatedBy, 'natasha@example.ru'); eq(r.updatedAt, '2026-10-02T10:00:00.000Z'); eq(r.createdAt, '2026-10-02T10:00:00.000Z');
+      eq(r.extra, undefined); eq(r.id, 'id1');
+      assert.deepStrictEqual(Object.keys(r).sort(), ['createdAt', 'date', 'id', 'inn', 'lines', 'mode', 'number', 'partner', 'type', 'updatedAt', 'updatedBy']);
+      return a.getAll();
+    }).then(all => { eq(all.length, 1); return a.remove('id1'); })
+    .then(() => a.getAll()).then(all => eq(all.length, 0));
+});
+test('Firebase-адаптер: putMany режет на пачки ≤400, replaceAll удаляет лишнее', () => {
+  const f = fakeSdk();
+  const a = new FbAdapter({}, { loadSdk: () => Promise.resolve(f.sdk), storage: null });
+  const many = Array.from({ length: 850 }, (_, i) => mkDoc(i));
+  return a.init().then(() => a.signIn('n@e.ru', 'x')).then(() => a.putMany(many)).then(() => {
+    assert.deepStrictEqual(f.db.commits, [400, 400, 50]); eq(Object.keys(f.db.docs).length, 850);
+    return a.replaceAll([mkDoc(1), mkDoc(2)]);
+  }).then(() => eq(Object.keys(f.db.docs).length, 2));
+});
+test('Firebase-адаптер: subscribe отдаёт данные сразу и сообщает об ошибке; регистрация шлёт письмо', () => {
+  const f = fakeSdk();
+  f.db.docs.z = mkDoc(9);
+  const a = new FbAdapter({}, { loadSdk: () => Promise.resolve(f.sdk), storage: null });
+  let got = null, err = null;
+  return a.init().then(() => {
+    a.subscribe((docs, info) => { got = { docs, info }; }, e => { err = e; });
+    eq(got.docs.length, 1); eq(got.info.fromCache, false);
+    f.db.listeners[0].err({ code: 'permission-denied' }); eq(err.code, 'permission-denied');
+    return a.signUp('new@example.ru', 'password123');
+  }).then(u => { eq(u.emailVerified, false); assert.deepStrictEqual(f.calls.slice(-2), [['create', 'new@example.ru'], ['verify', 'new@example.ru']]); });
+});
+test('Firebase-адаптер: недоступный SDK → код neit/sdk и понятный текст', () => {
+  const a = new FbAdapter({}, { loadSdk: () => Promise.reject(new Error('offline')), storage: null });
+  return a.init().then(() => assert.fail('должна быть ошибка'), e => {
+    eq(e.code, 'neit/sdk'); assert.ok(/интернет/.test(FbAdapter.explainError(e, 'auth')));
+  });
+});
+test('explainError: понятные русские сообщения', () => {
+  const x = (code, ctx) => FbAdapter.explainError({ code }, ctx);
+  assert.ok(/не в списке/.test(x('permission-denied', 'read')));
+  assert.ok(/Нет связи/.test(x('unavailable', 'read')));
+  assert.ok(/Нет связи/.test(x('auth/network-request-failed', 'auth')));
+  assert.ok(/Неверная почта или пароль/.test(x('auth/invalid-credential', 'auth')));
+  assert.ok(/уже зарегистрирована/.test(x('auth/email-already-in-use', 'auth')));
+  assert.ok(/не меньше 8/.test(x('auth/weak-password', 'auth')));
+  assert.ok(/Слишком много/.test(x('auth/too-many-requests', 'auth')));
+  assert.ok(/не прошли проверку/.test(x('permission-denied', 'write')));
+  assert.ok(/Что-то пошло не так/.test(x('weird', 'auth')));
+});
+test('SDK Firebase закреплён на версии 11.x и грузится только с gstatic', () => {
+  assert.ok(/^11\.\d+\.\d+$/.test(FbAdapter.SDK_VERSION));
+  const src = require('fs').readFileSync(__dirname + '/../js/storage-firebase.js', 'utf8');
+  const urls = src.match(/https?:\/\/[^\s'"]+/g) || [];
+  urls.forEach(u => assert.ok(/^https:\/\/www\.gstatic\.com\/firebasejs\//.test(u) || /^https?:\/\/(\.\.)?$/.test(u), 'внешний адрес: ' + u));
+});
+
+console.log('Правила безопасности и репозиторий');
+const fs = require('fs'), path = require('path');
+const root = path.join(__dirname, '..');
+test('firestore.rules: проверка входа, почты, списка и заглушки ПОЧТА_1..3', () => {
+  const r = fs.readFileSync(path.join(root, 'firestore.rules'), 'utf8');
+  assert.ok(r.includes('request.auth != null'));
+  assert.ok(r.includes('request.auth.token.email_verified == true'));
+  assert.ok(r.includes('request.auth.token.email in allowedEmails()'));
+  ['ПОЧТА_1', 'ПОЧТА_2', 'ПОЧТА_3'].forEach(p => assert.ok(r.includes("'" + p + "'"), p));
+  assert.ok(r.includes('match /upd/{docId}'));
+  assert.ok(/match \/\{document=\*\*\}[\s\S]*if false/.test(r), 'всё остальное запрещено');
+  const code = r.replace(/\/\/.*$/gm, '');          // без комментариев
+  eq((code.match(/\{/g) || []).length, (code.match(/\}/g) || []).length, 'скобки {} сбалансированы');
+  eq((code.match(/\(/g) || []).length, (code.match(/\)/g) || []).length, 'скобки () сбалансированы');
+  eq((code.match(/\[/g) || []).length, (code.match(/\]/g) || []).length, 'скобки [] сбалансированы');
+});
+test('В репозитории нет паролей и личных почт (кроме публичного firebaseConfig)', () => {
+  const files = ['README.md', 'firestore.rules', 'index.html'].concat(fs.readdirSync(path.join(root, 'js')).map(f => 'js/' + f));
+  files.forEach(f => {
+    const t = fs.readFileSync(path.join(root, f), 'utf8');
+    assert.ok(!/password\s*[:=]\s*['"][^'"]{3,}['"]/i.test(t), 'пароль в ' + f);
+    const mails = (t.match(/[\w.+-]+@[\w-]+\.[\w.-]+/g) || []).filter(m => !/^(name|natasha|nastya|andrey|n|new|natasha)@/i.test(m) && !/example\.|mail\.ru$|gmail\.com$/.test(m));
+    assert.deepStrictEqual(mails, [], 'почта в ' + f);
+  });
+});
+
 setTimeout(() => {
   console.log('\nИтог: пройдено ' + passed + ', провалено ' + failed);
   process.exit(failed ? 1 : 0);

@@ -1,7 +1,8 @@
 /*
  * app.js — экран сайта: вкладки, списки, формы, окна, кнопки.
  * Все расчёты берутся из NeitCore (js/core.js), CSV — из NeitCsv (js/csv.js),
- * хранение — из адаптера NeitStorage (js/storage.js).
+ * хранение — из адаптера общей базы NeitFirebaseAdapter (js/storage-firebase.js);
+ * NeitStorage (js/storage.js) нужен только чтобы найти СТАРЫЕ данные на этом устройстве и предложить перенос.
  *
  * Структура файла:
  *   1. Мелкие помощники (создание элементов, всплывающие сообщения, скачивание)
@@ -79,34 +80,242 @@
   /* =====================================================================
    * 2. Состояние и запуск
    * =================================================================== */
-  var storage = window.NeitStorage.create();    // ← для Firebase заменить здесь (см. js/storage-firebase.js)
+  var storage = new window.NeitFirebaseAdapter(window.NEIT_FIREBASE_CONFIG);   // общая база
+  var legacy = window.NeitStorage.create();                                    // старые данные на этом устройстве (только чтение + перенос)
   var cq = Core.currentQuarter();
-  var state = { docs: [], meta: {}, tab: 'summary', year: cq.year, quarter: cq.quarter };
+  var state = {
+    docs: [], meta: {}, tab: 'summary', year: cq.year, quarter: cq.quarter,
+    screen: 'loading',          // loading | fatal | login | verify | denied | app
+    user: null, loaded: false,  // loaded — первые данные из базы получены
+    conn: { fromCache: false, pending: false },
+    legacyDocs: [], legacyMeta: {},
+    verifyNotice: '', fatalText: ''
+  };
+  var unsubscribe = null, lastSig = null, draftEmail = '';
 
   function saveError(e) {
     console.error(e);
-    toast('Не удалось сохранить: ' + (e && e.name === 'QuotaExceededError' ? 'в браузере закончилось место.' : 'ошибка хранилища.'));
+    toast('Не удалось сохранить. ' + window.NeitFirebaseAdapter.explainError(e, 'write'));
   }
 
   function start() {
-    storage.init()
-      .then(function () { return Promise.all([storage.getAll(), storage.getMeta()]); })
+    bindStaticUi();
+    $('#appVersion').textContent = window.NEIT_APP_VERSION || '';
+    setScreen('loading');
+    window.addEventListener('online', renderStatusBar);
+    window.addEventListener('offline', renderStatusBar);
+    legacy.init()
+      .then(function () { return Promise.all([legacy.getAll(), legacy.getMeta()]); })
       .then(function (r) {
-        state.docs = r[0].map(Core.normalizeDoc).filter(Boolean);
-        state.meta = r[1];
-        if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
-        bindStaticUi();
-        renderAll();
+        state.legacyDocs = r[0].map(Core.normalizeDoc).filter(Boolean);
+        state.legacyMeta = r[1] || {};
       })
+      .catch(function () { state.legacyDocs = []; })
+      .then(function () { return storage.init(); })
+      .then(function () { return storage.getMeta(); })
+      .then(function (meta) { state.meta = meta || {}; storage.onAuth(route); })
       .catch(function (e) {
         console.error(e);
-        $('#view').appendChild(el('p', { class: 'banner banner-error', text: 'Не удалось открыть хранилище данных. Обновите страницу.' }));
+        state.fatalText = window.NeitFirebaseAdapter.explainError(e, 'auth');
+        setScreen('fatal');
       });
   }
 
   /** Обновляет список документов в памяти из хранилища. */
   function reload() {
     return storage.getAll().then(function (docs) { state.docs = docs.map(Core.normalizeDoc).filter(Boolean); });
+  }
+
+  /** Куда направить человека в зависимости от того, вошёл ли он и подтверждена ли почта. */
+  function route(user) {
+    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+    state.user = user; state.docs = []; state.loaded = false; lastSig = null;
+    if (!user) { setScreen('login'); return; }
+    if (!user.emailVerified) { setScreen('verify'); return; }
+    setScreen('app');
+    unsubscribe = storage.subscribe(onDocs, onSubscribeError);
+  }
+
+  function onDocs(docs, info) {
+    var normalized = docs.map(Core.normalizeDoc).filter(Boolean);
+    var sig = JSON.stringify(normalized) + '|' + !!info.fromCache + '|' + !!info.hasPendingWrites + '|' + state.loaded;
+    state.docs = normalized;
+    state.conn = { fromCache: !!info.fromCache, pending: !!info.hasPendingWrites };
+    var first = !state.loaded;
+    state.loaded = true;
+    if (first || sig !== lastSig) { lastSig = sig; renderAll(); }
+  }
+
+  function onSubscribeError(e) {
+    unsubscribe = null;
+    var code = e && e.code ? String(e.code) : '';
+    if (code === 'permission-denied' || code === 'firestore/permission-denied') { setScreen('denied'); return; }   // ожидаемая ситуация, не ошибка сайта
+    console.error(e);
+    state.fatalText = window.NeitFirebaseAdapter.explainError(e, 'read');
+    setScreen('fatal');
+  }
+
+  /* =====================================================================
+   * 2а. Экраны входа
+   * =================================================================== */
+  var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  /** Переключает экран: служебные (вход, подтверждение…) или основной (app). */
+  function setScreen(name) {
+    state.screen = name;
+    var isApp = name === 'app';
+    $('#appShell').hidden = !isApp;
+    var box = $('#authScreen');
+    box.hidden = isApp;
+    box.replaceChildren();
+    if (name === 'loading') box.appendChild(authCard('Подключаемся…', [el('p', { id: 'authLoading', text: 'Подключаемся к общей базе. Это занимает несколько секунд.' })]));
+    else if (name === 'fatal') box.appendChild(renderFatal());
+    else if (name === 'login') box.appendChild(renderLogin());
+    else if (name === 'verify') box.appendChild(renderVerify());
+    else if (name === 'denied') box.appendChild(renderDenied());
+    else if (isApp) { renderAll(); }
+    renderStatusBar();
+  }
+
+  function authCard(title, children) {
+    return el('div', { class: 'card auth-card' }, el('h2', { text: title }), children);
+  }
+
+  function renderFatal() {
+    return authCard('Не получилось подключиться', [
+      el('div', { class: 'banner banner-error', role: 'alert', id: 'fatalText', text: state.fatalText || 'Неизвестная ошибка.' }),
+      el('div', { class: 'btn-row' }, el('button', { class: 'btn btn-primary', id: 'btnReload', text: 'Обновить страницу', onclick: function () { location.reload(); } }),
+        state.user ? el('button', { class: 'btn', text: 'Выйти', onclick: doSignOut }) : null)]);
+  }
+
+  function renderLogin(message) {
+    var emailIn = el('input', { class: 'input', id: 'authEmail', type: 'email', autocomplete: 'username', inputmode: 'email', placeholder: 'name@mail.ru', value: draftEmail });
+    var passIn = el('input', { class: 'input', id: 'authPassword', type: 'password', autocomplete: 'current-password', placeholder: 'пароль' });
+    var showPass = el('input', { type: 'checkbox', id: 'authShow' });
+    showPass.addEventListener('change', function () { passIn.type = showPass.checked ? 'text' : 'password'; });
+    var errBox = el('div', { class: 'banner banner-error', role: 'alert', id: 'authError', hidden: true });
+    var okBox = el('div', { class: 'banner banner-ok', role: 'status', id: 'authInfo', hidden: !message, text: message || '' });
+    var bIn = el('button', { type: 'submit', class: 'btn btn-primary', id: 'btnSignIn', text: 'Войти' });
+    var bUp = el('button', { type: 'button', class: 'btn', id: 'btnSignUp', text: 'Создать аккаунт' });
+    var bForgot = el('button', { type: 'button', class: 'link', id: 'btnForgot', text: 'Забыли пароль?' });
+
+    function fail(text) { errBox.textContent = text; errBox.hidden = false; okBox.hidden = true; }
+    function busy(on) { [bIn, bUp, bForgot].forEach(function (b) { b.disabled = on; }); }
+    function readEmail() {
+      draftEmail = emailIn.value.trim();
+      emailIn.classList.remove('invalid'); passIn.classList.remove('invalid');
+      if (!draftEmail) { emailIn.classList.add('invalid'); emailIn.focus(); fail('Введите адрес почты.'); return null; }
+      if (!EMAIL_RE.test(draftEmail)) { emailIn.classList.add('invalid'); emailIn.focus(); fail('Адрес почты написан неправильно. Пример: name@mail.ru'); return null; }
+      errBox.hidden = true;
+      return draftEmail;
+    }
+    function run(promise, onOk) {
+      busy(true);
+      promise.then(function (r) { busy(false); if (onOk) onOk(r); }, function (e) {
+        busy(false);
+        if (e && e.accountCreated) { state.verifyNotice = 'Аккаунт создан, но письмо отправить не удалось. ' + window.NeitFirebaseAdapter.explainError(e, 'auth') + ' Нажмите «Отправить письмо ещё раз».'; if (state.screen === 'verify') setScreen('verify'); return; }
+        fail(window.NeitFirebaseAdapter.explainError(e, 'auth'));
+      });
+    }
+
+    var form = el('form', { novalidate: true, id: 'authForm' },
+      okBox, errBox,
+      el('div', { class: 'field' }, el('label', { for: 'authEmail', text: 'Почта' }), emailIn),
+      el('div', { class: 'field' }, el('label', { for: 'authPassword', text: 'Пароль' }), passIn,
+        el('label', { class: 'check', for: 'authShow' }, showPass, 'Показать пароль')),
+      el('div', { class: 'btn-row' }, bIn, bUp),
+      el('p', null, bForgot),
+      el('p', { class: 'hint', text: 'Войти могут только сотрудники, чья почта добавлена в список. Если вы здесь впервые: нажмите «Создать аккаунт», подтвердите почту по ссылке из письма и сообщите Андрею, какую почту вы указали — он добавит её в список.' }));
+
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var email = readEmail(); if (!email) return;
+      if (!passIn.value) { passIn.classList.add('invalid'); passIn.focus(); fail('Введите пароль.'); return; }
+      run(storage.signIn(email, passIn.value));
+    });
+    bUp.addEventListener('click', function () {
+      var email = readEmail(); if (!email) return;
+      if (passIn.value.length < 8) { passIn.classList.add('invalid'); passIn.focus(); fail('Придумайте пароль: не меньше 8 символов.'); return; }
+      state.verifyNotice = '';
+      run(storage.signUp(email, passIn.value), function () {
+        state.verifyNotice = 'Мы отправили письмо на ' + email + '.';
+        if (state.screen === 'verify') setScreen('verify');
+      });
+    });
+    bForgot.addEventListener('click', function () {
+      var email = readEmail(); if (!email) return;
+      run(storage.resetPassword(email), function () {
+        okBox.textContent = 'Если эта почта зарегистрирована, мы отправили на неё письмо со ссылкой для нового пароля. Проверьте и папку «Спам».';
+        okBox.hidden = false;
+      });
+    });
+    return authCard('Вход', [form]);
+  }
+
+  function renderVerify() {
+    var email = state.user ? state.user.email : '';
+    var info = el('div', { class: 'banner banner-ok', role: 'status', id: 'verifyNotice', hidden: !state.verifyNotice, text: state.verifyNotice });
+    var msg = el('div', { class: 'banner banner-warn', role: 'alert', id: 'verifyMsg', hidden: true });
+    var bCheck = el('button', { class: 'btn btn-primary', id: 'btnVerified', text: 'Я подтвердил(а) почту' });
+    var bResend = el('button', { class: 'btn', id: 'btnResend', text: 'Отправить письмо ещё раз' });
+    function say(t, ok) { msg.textContent = t; msg.className = 'banner ' + (ok ? 'banner-ok' : 'banner-warn'); msg.hidden = false; }
+    function busy(on) { bCheck.disabled = on; bResend.disabled = on; }
+    bCheck.addEventListener('click', function () {
+      busy(true);
+      storage.refreshUser().then(function (u) {
+        busy(false);
+        if (u && u.emailVerified) route(u);
+        else say('Почта ещё не подтверждена. Откройте письмо и нажмите на ссылку в нём (проверьте папку «Спам»), потом нажмите эту кнопку снова.', false);
+      }, function (e) { busy(false); say(window.NeitFirebaseAdapter.explainError(e, 'auth'), false); });
+    });
+    bResend.addEventListener('click', function () {
+      busy(true);
+      storage.sendVerification().then(function () { busy(false); say('Письмо отправлено ещё раз на ' + email + '.', true); },
+        function (e) { busy(false); say(window.NeitFirebaseAdapter.explainError(e, 'auth'), false); });
+    });
+    return authCard('Подтвердите почту', [
+      info,
+      el('p', null, 'Вы вошли как ', el('b', { text: email }), '. Чтобы получить доступ к данным, почту нужно подтвердить.'),
+      el('ol', null,
+        el('li', { text: 'Откройте письмо от Firebase (проверьте и папку «Спам»).' }),
+        el('li', { text: 'Нажмите в письме на ссылку подтверждения.' }),
+        el('li', { text: 'Вернитесь сюда и нажмите «Я подтвердил(а) почту» — или выйдите и войдите заново.' })),
+      msg,
+      el('div', { class: 'btn-row' }, bCheck, bResend, el('button', { class: 'btn', id: 'btnLogoutVerify', text: 'Выйти', onclick: doSignOut }))]);
+  }
+
+  function renderDenied() {
+    var email = state.user ? state.user.email : '';
+    var msg = el('div', { class: 'banner banner-warn', hidden: true, id: 'deniedMsg' });
+    var bRetry = el('button', { class: 'btn btn-primary', id: 'btnRetry', text: 'Проверить ещё раз', onclick: function () {
+      bRetry.disabled = true;
+      storage.refreshUser().then(function (u) { route(u); }, function (e) { bRetry.disabled = false; msg.textContent = window.NeitFirebaseAdapter.explainError(e, 'auth'); msg.hidden = false; });
+    } });
+    return authCard('Нет доступа', [
+      el('div', { class: 'banner banner-error', role: 'alert', id: 'deniedText', text: 'Нет доступа: ваш email не в списке разрешённых.' }),
+      el('p', null, 'Вы вошли как ', el('b', { text: email }), '. Сообщите Андрею эту почту — он добавит её в список. После этого нажмите «Проверить ещё раз».'),
+      msg,
+      el('div', { class: 'btn-row' }, bRetry, el('button', { class: 'btn', id: 'btnLogoutDenied', text: 'Выйти и войти под другой почтой', onclick: doSignOut }))]);
+  }
+
+  function doSignOut() {
+    storage.signOut().catch(function (e) { toast(window.NeitFirebaseAdapter.explainError(e, 'auth')); });
+  }
+
+  /** Строка состояния: «Общая база подключена, вы вошли как …» + кнопка «Выйти». */
+  function renderStatusBar() {
+    var b = $('#statusBar');
+    b.replaceChildren();
+    if (!state.user || state.screen !== 'app') { b.hidden = true; return; }
+    var offline = (typeof navigator !== 'undefined' && navigator.onLine === false) || (state.loaded && state.conn.fromCache);
+    var text, cls;
+    if (offline) { cls = 'banner-warn'; text = 'Нет связи с общей базой — показаны последние полученные данные; изменения не сохранятся, пока нет интернета. '; }
+    else if (state.conn.pending) { cls = 'banner-warn'; text = 'Отправляем изменения в общую базу… '; }
+    else { cls = 'banner-ok'; text = 'Общая база подключена, '; }
+    b.className = 'banner status-bar ' + cls;
+    b.appendChild(el('span', { id: 'statusText' }, text + 'вы вошли как ', el('b', { text: state.user.email })));
+    b.appendChild(el('button', { class: 'btn btn-small', id: 'btnSignOut', text: 'Выйти', onclick: doSignOut }));
+    b.hidden = false;
   }
 
   /* =====================================================================
@@ -120,31 +329,73 @@
   }
 
   function renderAll() {
-    renderBanner();
+    if (state.screen !== 'app') return;
+    renderStatusBar();
+    renderMigrate();
     renderPeriod();
     document.querySelectorAll('.tab').forEach(function (b) { b.setAttribute('aria-selected', b.dataset.tab === state.tab ? 'true' : 'false'); });
     var view = $('#view');
     view.replaceChildren();
+    if (!state.loaded) { view.appendChild(el('div', { class: 'card empty', id: 'viewLoading' }, el('p', { text: 'Загружаем данные из общей базы…' }))); return; }
     if (state.tab === 'summary') view.appendChild(renderSummary());
     else if (state.tab === 'data') view.appendChild(renderDataTab());
     else view.appendChild(renderList(state.tab));
   }
 
-  function renderBanner() {
-    var b = $('#storageBanner');
-    b.replaceChildren();
-    b.className = 'banner banner-warn';
-    if (!storage.persistent) {
-      b.className = 'banner banner-error';
-      b.append('Браузер не разрешает сохранять данные (возможно, включён приватный режим). Всё, что вы введёте, пропадёт при закрытии страницы. Откройте сайт в обычном окне.');
-      b.hidden = false; return;
+  /* Предложение перенести старые данные с этого устройства (кнопкой, не автоматически). */
+  function renderMigrate() {
+    var box = $('#migrateBox');
+    box.replaceChildren();
+    var m = state.legacyMeta || {};
+    if (!state.loaded || !state.legacyDocs.length || m.migratedAt || m.migrateDismissed) { box.hidden = true; return; }
+    box.hidden = false;
+    box.appendChild(el('div', { class: 'banner banner-warn', id: 'migrateBanner' },
+      el('p', null, el('b', { text: 'На этом устройстве есть старые данные: ' + state.legacyDocs.length + ' УПД. ' }),
+        'Они сохранены только в этом браузере. Чтобы Наташа и Настя их видели, перенесите их в общую базу. Дубли пропустим.'),
+      el('div', { class: 'btn-row' },
+        el('button', { class: 'btn btn-primary', id: 'btnMigrate', text: 'Перенести данные с этого устройства в общую базу', onclick: migrateLegacy }),
+        el('button', { class: 'btn', id: 'btnMigrateHide', text: 'Не переносить', onclick: dismissMigrate }))));
+  }
+
+  /** Делит УПД на подходящие для базы и неполные (без номера/контрагента, слишком длинные поля). */
+  function splitStorable(docs) {
+    var ok = [], bad = 0;
+    docs.forEach(function (d) {
+      var e = Core.validateDoc(d).errors;
+      if (e.date || e.number || e.partner || e.inn || e.lines) bad++; else ok.push(d);
+    });
+    return { ok: ok, bad: bad };
+  }
+
+  function saveLegacyMeta(patch) {
+    state.legacyMeta = Object.assign({}, state.legacyMeta, patch);
+    return legacy.setMeta(state.legacyMeta).catch(function () {});
+  }
+
+  function dismissMigrate() {
+    confirmDialog({ title: 'Не переносить данные?', text: 'Старые данные останутся только на этом устройстве, и это предложение больше не появится. Их можно будет сохранить файлом резервной копии, пока вы не очистите данные браузера.', okText: 'Да, не переносить' })
+      .then(function (ok) { if (ok) saveLegacyMeta({ migrateDismissed: new Date().toISOString() }).then(renderAll); });
+  }
+
+  function migrateLegacy() {
+    var split = splitStorable(state.legacyDocs);
+    var plan = Core.planMerge(state.docs, split.ok);
+    var text = 'На этом устройстве найдено УПД: ' + state.legacyDocs.length + '. Новых для общей базы: ' + plan.fresh.length +
+      '. Уже есть в базе (пропустим): ' + plan.duplicates + (split.bad ? '. Неполных (пропустим): ' + split.bad : '') + '.';
+    if (!plan.fresh.length) {
+      confirmDialog({ title: 'Переносить нечего', text: text + ' Отметить перенос выполненным и убрать это сообщение?', okText: 'Да, убрать' })
+        .then(function (ok) { if (ok) saveLegacyMeta({ migratedAt: new Date().toISOString() }).then(renderAll); });
+      return;
     }
-    if (storage.shared) { b.hidden = true; return; }
-    var last = state.meta.lastBackup ? Core.formatDate(state.meta.lastBackup.slice(0, 10)) : null;
-    b.append('Данные хранятся только в этом браузере на этом устройстве — у Насти и Наташи они сейчас разные. ',
-      'Последняя резервная копия: ' + (last || 'ещё не делали') + '. ');
-    b.appendChild(el('button', { class: 'link', text: 'Сохранить копию', onclick: function () { state.tab = 'data'; renderAll(); } }));
-    b.hidden = false;
+    confirmDialog({ title: 'Перенести данные в общую базу?', text: text + ' После переноса их увидят все, кто вошёл. На этом устройстве копия останется.', okText: 'Перенести: ' + plan.fresh.length })
+      .then(function (ok) {
+        if (!ok) return;
+        $('#btnMigrate') && ($('#btnMigrate').disabled = true);
+        storage.putMany(plan.fresh).then(reload)
+          .then(function () { return saveLegacyMeta({ migratedAt: new Date().toISOString() }); })
+          .then(function () { renderAll(); toast('Перенесено УПД: ' + plan.fresh.length); })
+          .catch(function (e) { $('#btnMigrate') && ($('#btnMigrate').disabled = false); saveError(e); });
+      });
   }
 
   function renderPeriod() {
@@ -313,7 +564,7 @@
   function deleteDoc(d) {
     confirmDialog({
       title: 'Удалить УПД?',
-      text: '№ ' + d.number + ' от ' + Core.formatDate(d.date) + ', ' + d.partner + ', итого ' + money(Core.calcDoc(d).gross) + '. Вернуть удалённое не получится (только из резервной копии).',
+      text: '№ ' + d.number + ' от ' + Core.formatDate(d.date) + ', ' + d.partner + ', итого ' + money(Core.calcDoc(d).gross) + '. УПД исчезнет у всех, кто работает с сайтом. Вернуть удалённое не получится (только из резервной копии).',
       okText: 'Да, удалить', danger: true
     }).then(function (ok) {
       if (!ok) return;
@@ -455,7 +706,7 @@
         field('Номер УПД', iNum, 'number')),
       field(isSale ? 'Покупатель (контрагент)' : 'Поставщик (контрагент)', iPartner, 'partner'),
       el('datalist', { id: 'partnerList' }, Object.keys(partners).map(function (p) { return el('option', { value: p }); })),
-      el('div', { class: 'field' }, el('label', { for: 'f-inn', text: 'ИНН контрагента' }), iInn, innHint),
+      el('div', { class: 'field' }, el('label', { for: 'f-inn', text: 'ИНН контрагента' }), iInn, innHint, errEl('inn')),
       el('div', { class: 'field' }, el('div', { class: 'lbl', text: 'Сумма в УПД указана:' }), modeRow,
         el('div', { class: 'hint', text: 'Смотрите в документе: «Стоимость без налога» или «Стоимость с налогом».' })),
       el('h3', { text: 'Строки УПД' }),
@@ -478,8 +729,8 @@
         var dup = state.docs.find(function (x) { return x.type === type && Core.docKey(x) === key && (!doc || x.id !== doc.id); });
         if (dup) errors.number = 'Такой УПД уже есть (та же дата, номер и контрагент). Проверьте номер или дату.';
       }
-      ['date', 'number', 'partner', 'lines'].forEach(function (n) { setErr(n, errors[n]); });
-      iDate.classList.toggle('invalid', !!errors.date); iNum.classList.toggle('invalid', !!errors.number); iPartner.classList.toggle('invalid', !!errors.partner);
+      ['date', 'number', 'partner', 'inn', 'lines'].forEach(function (n) { setErr(n, errors[n]); });
+      iDate.classList.toggle('invalid', !!errors.date); iNum.classList.toggle('invalid', !!errors.number); iPartner.classList.toggle('invalid', !!errors.partner); iInn.classList.toggle('invalid', !!errors.inn);
       st.lines.forEach(function (l, i) { setErr('line-' + i, errors['line-' + i]); var a = document.getElementById('amt-' + i); if (a) a.classList.toggle('invalid', !!errors['line-' + i]); });
       var keys = Object.keys(errors);
       summaryErr.hidden = !keys.length;
@@ -514,11 +765,17 @@
     var dlg = $('#dlgConfirm');
     return new Promise(function (resolve) {
       var answer = false;
+      var okBtn = el('button', { class: 'btn ' + (opts.danger ? 'btn-danger solid' : 'btn-primary'), id: 'btnConfirmOk', text: opts.okText || 'Да', disabled: !!opts.typeWord, onclick: function () { answer = true; dlg.close(); } });
+      var typed = null;
+      if (opts.typeWord) {      // для самых опасных действий: нужно набрать слово вручную
+        typed = el('input', { class: 'input', id: 'confirmTyped', type: 'text', autocomplete: 'off', 'aria-label': 'Введите слово ' + opts.typeWord });
+        typed.addEventListener('input', function () { okBtn.disabled = typed.value.trim().toUpperCase() !== opts.typeWord; });
+      }
       dlg.replaceChildren(
         el('div', { class: 'dlg-head' }, el('h2', { id: 'confirmTitle', text: opts.title })),
-        el('div', { class: 'dlg-body' }, el('p', { text: opts.text })),
-        el('div', { class: 'dlg-foot' },
-          el('button', { class: 'btn ' + (opts.danger ? 'btn-danger solid' : 'btn-primary'), id: 'btnConfirmOk', text: opts.okText || 'Да', onclick: function () { answer = true; dlg.close(); } }),
+        el('div', { class: 'dlg-body' }, el('p', { text: opts.text }),
+          typed ? el('div', { class: 'field' }, el('label', { for: 'confirmTyped', text: 'Чтобы подтвердить, введите слово ' + opts.typeWord }), typed) : null),
+        el('div', { class: 'dlg-foot' }, okBtn,
           el('button', { class: 'btn', id: 'btnConfirmCancel', text: 'Отмена', onclick: function () { dlg.close(); } })));
       dlg.addEventListener('close', function () { resolve(answer); }, { once: true });
       dlg.showModal();
@@ -639,22 +896,21 @@
     var root = el('div');
     var nSale = state.docs.filter(function (d) { return d.type === 'sale'; }).length;
     var nPurch = state.docs.length - nSale;
-    var last = state.meta.lastBackup ? Core.formatDate(state.meta.lastBackup.slice(0, 10)) : 'ещё не делали';
+    var last = state.meta.lastBackup ? Core.formatDate(state.meta.lastBackup.slice(0, 10)) : 'ещё не делали на этом устройстве';
     root.appendChild(el('h2', { text: 'Резервная копия данных' }));
     root.appendChild(el('div', { class: 'card' },
       el('p', { id: 'storageInfo', text: 'Где лежат данные: ' + storage.describe() + '.' }),
       el('p', { text: 'Сейчас записано: наших УПД — ' + nSale + ', УПД поставщиков — ' + nPurch + '. Последняя копия: ' + last + '.' }),
-      el('p', { class: 'warn-text', text: 'Пока нет общей базы, если очистить данные браузера или сменить телефон/компьютер, записи пропадут. Сохраняйте копию после работы (например, раз в неделю) и храните файл в надёжном месте.' }),
+      el('p', { class: 'warn-text', text: 'Общая база надёжнее браузера, но от ошибок (например, случайно удалили УПД) защищает только копия. Сохраняйте файл после работы (хотя бы раз в неделю) и храните в надёжном месте.' }),
       el('div', { class: 'btn-row' },
         el('button', { class: 'btn btn-primary', id: 'btnBackup', text: 'Сохранить резервную копию', onclick: backup }),
-        el('label', { class: 'btn', id: 'lblRestore', text: 'Загрузить копию', for: 'restoreFile' }),
+        el('label', { class: 'btn', id: 'lblRestore', text: 'Добавить данные из копии', for: 'restoreFile' }),
         el('input', { type: 'file', id: 'restoreFile', accept: '.json,application/json', hidden: true, onchange: function (e) { restore(e.target.files[0]); e.target.value = ''; } }))));
-    root.appendChild(el('div', { class: 'card help' }, el('h3', { text: 'Как перенести данные на другое устройство' }),
-      el('ol', null, el('li', { text: 'На старом устройстве нажмите «Сохранить резервную копию» — скачается файл .json.' }),
-        el('li', { text: 'Перешлите файл себе (почта, мессенджер).' }),
-        el('li', { text: 'На новом устройстве откройте этот сайт и нажмите «Загрузить копию». Внимание: загрузка копии заменяет всё, что уже записано на этом устройстве.' }))));
-    root.appendChild(el('div', { class: 'card' }, el('h3', { text: 'Очистить все данные' }),
-      el('p', { class: 'muted', text: 'Удаляет все УПД из этого браузера. Сначала сохраните копию.' }),
+    root.appendChild(el('div', { class: 'card help' }, el('h3', { text: 'Как вернуть данные из копии' }),
+      el('ol', null, el('li', { text: 'Нажмите «Добавить данные из копии» и выберите файл .json, сохранённый раньше.' }),
+        el('li', { text: 'Сайт покажет, сколько УПД из копии новые, а сколько уже есть — и добавит только новые, без дублей. Существующие записи не меняются и не удаляются.' }))));
+    root.appendChild(el('div', { class: 'card' }, el('h3', { text: 'Очистить общую базу' }),
+      el('p', { class: 'muted', text: 'Удаляет ВСЕ УПД из общей базы — они пропадут у всех. Сначала сохраните резервную копию.' }),
       el('button', { class: 'btn btn-danger', id: 'btnClear', text: 'Удалить все данные…', onclick: clearAll })));
     return root;
   }
@@ -667,6 +923,7 @@
     storage.setMeta(state.meta).then(function () { renderAll(); toast('Резервная копия скачана (' + state.docs.length + ' УПД)'); }).catch(saveError);
   }
 
+  /** Возврат из копии: добавляет только новые УПД (без дублей), ничего не заменяет и не удаляет. */
   function restore(file) {
     if (!file) return;
     file.text().then(function (text) {
@@ -674,20 +931,21 @@
       try { data = JSON.parse(text); } catch (e) { data = null; }
       if (!data || data.app !== 'neit-upd' || !Array.isArray(data.docs)) { toast('Это не файл резервной копии этого сайта.'); return; }
       var docs = data.docs.map(Core.normalizeDoc).filter(Boolean);
-      var skipped = data.docs.length - docs.length;
-      return confirmDialog({
-        title: 'Загрузить копию?',
-        text: 'В копии УПД: ' + docs.length + (skipped ? ' (' + skipped + ' повреждённых пропустим)' : '') + '. Сейчас на этом устройстве: ' + state.docs.length + '. Текущие данные будут ЗАМЕНЕНЫ данными из копии.',
-        okText: 'Заменить данные', danger: true
-      }).then(function (ok) {
-        if (!ok) return;
-        return storage.replaceAll(docs).then(reload).then(function () { renderAll(); toast('Копия загружена: ' + docs.length + ' УПД'); });
-      });
+      var split = splitStorable(docs);
+      var plan = Core.planMerge(state.docs, split.ok);
+      var broken = data.docs.length - split.ok.length;
+      var info = 'В копии УПД: ' + data.docs.length + '. Новых: ' + plan.fresh.length + '. Уже есть в базе (пропустим): ' + plan.duplicates + (broken ? '. Повреждённых или неполных (пропустим): ' + broken : '') + '.';
+      if (!plan.fresh.length) { toast('Добавлять нечего. ' + info); return; }
+      return confirmDialog({ title: 'Добавить данные из копии?', text: info + ' Новые УПД появятся у всех, кто вошёл.', okText: 'Добавить: ' + plan.fresh.length })
+        .then(function (ok) {
+          if (!ok) return;
+          return storage.putMany(plan.fresh).then(reload).then(function () { renderAll(); toast('Добавлено из копии: ' + plan.fresh.length); });
+        });
     }).catch(saveError);
   }
 
   function clearAll() {
-    confirmDialog({ title: 'Удалить ВСЕ данные?', text: 'Будет удалено УПД: ' + state.docs.length + '. Это нельзя отменить (кроме загрузки ранее сохранённой копии).', okText: 'Да, удалить всё', danger: true })
+    confirmDialog({ title: 'Удалить ВСЕ данные из общей базы?', text: 'Будет удалено УПД: ' + state.docs.length + ' — у всех пользователей. Это нельзя отменить (кроме добавления ранее сохранённой копии).', okText: 'Да, удалить всё', danger: true, typeWord: 'УДАЛИТЬ' })
       .then(function (ok) {
         if (!ok) return;
         storage.replaceAll([]).then(reload).then(function () { renderAll(); toast('Все данные удалены'); }).catch(saveError);
