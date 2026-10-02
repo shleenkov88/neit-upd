@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex">
+  <title>УПД и НДС — ООО «Нейт»</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%231a56db%27/%3E%3Ctext x=%2716%27 y=%2723%27 font-size=%2720%27 font-family=%27Arial%27 font-weight=%27bold%27 text-anchor=%27middle%27 fill=%27white%27%3E%25%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Шапка -->
+  <header class="app-header">
+    <div class="wrap">
+      <h1>УПД и НДС</h1>
+      <p class="muted">ООО «Нейт» · ИНН 3702195003 · ОСНО</p>
+    </div>
+  </header>
+
+  <!-- Предупреждение про хранение данных (заполняется из app.js) -->
+  <div class="wrap"><div id="storageBanner" class="banner banner-warn" role="note" hidden></div></div>
+
+  <!-- Выбор периода -->
+  <section class="wrap period" aria-label="Период">
+    <div class="period-row">
+      <label class="field-inline">Год
+        <select id="yearSelect" class="input"></select>
+      </label>
+      <div class="seg" id="quarterSeg" role="group" aria-label="Квартал"></div>
+    </div>
+    <p id="periodText" class="muted period-text"></p>
+  </section>
+
+  <!-- Вкладки -->
+  <nav class="tabs" role="tablist" aria-label="Разделы">
+    <div class="wrap tabs-inner">
+      <button class="tab" role="tab" data-tab="summary" id="tabBtn-summary">Итоги</button>
+      <button class="tab" role="tab" data-tab="sale" id="tabBtn-sale">Наши УПД</button>
+      <button class="tab" role="tab" data-tab="purchase" id="tabBtn-purchase">УПД поставщиков</button>
+      <button class="tab" role="tab" data-tab="data" id="tabBtn-data">Копия данных</button>
+    </div>
+  </nav>
+
+  <main class="wrap" id="main" tabindex="-1">
+    <noscript><p class="banner banner-error">Для работы сайта нужен включённый JavaScript.</p></noscript>
+    <div id="view"></div>
+  </main>
+
+  <footer class="wrap muted footer">
+    <p>Сайт считает по введённым вами данным и не заменяет бухгалтера. Итоговые суммы перед сдачей отчётности сверяйте с учётной системой.</p>
+  </footer>
+
+  <!-- Окна -->
+  <dialog id="dlgForm" aria-labelledby="formTitle"></dialog>
+  <dialog id="dlgConfirm" aria-labelledby="confirmTitle"></dialog>
+  <dialog id="dlgImport" aria-labelledby="importTitle"></dialog>
+
+  <!-- Короткие всплывающие сообщения -->
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="js/core.js"></script>
+  <script src="js/csv.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
