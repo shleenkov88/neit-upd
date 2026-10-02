@@ -195,6 +195,8 @@
   function rememberLogin() { try { localStorage.setItem(HAD_LOGIN_KEY, '1'); } catch (e) { /* хранилище недоступно — не страшно */ } }
   var MIN_PASSWORD = 6;
   var HINT_FIRST_TIME = 'Если вы здесь впервые — перейдите на вкладку «Я здесь впервые».';
+  var HINT_SIGNUP_PW = 'Пароль вы придумываете сами. Его никто не выдаёт и не присылает — просто введите любой новый пароль (минимум 6 символов) и запомните его.';
+  var HINT_SIGNIN_PW = 'Пароль — тот, который вы сами придумали при первой регистрации. Забыли — нажмите «Забыли пароль?»';
   var MSG_EMAIL_TAKEN = 'Эта почта уже зарегистрирована. Нажмите «Войти» или «Забыли пароль?»';
 
   /**
@@ -208,7 +210,7 @@
     var signup = mode === 'signup';
 
     var emailIn = el('input', { class: 'input', id: 'authEmail', type: 'email', autocomplete: 'username', inputmode: 'email', placeholder: 'name@mail.ru', value: draftEmail });
-    var passIn = el('input', { class: 'input', id: 'authPassword', type: 'password', autocomplete: signup ? 'new-password' : 'current-password', placeholder: signup ? 'придумайте пароль' : 'пароль' });
+    var passIn = el('input', { class: 'input', id: 'authPassword', type: 'password', autocomplete: signup ? 'new-password' : 'current-password', placeholder: signup ? 'Придумайте пароль' : 'Пароль' });
     var pass2In = signup ? el('input', { class: 'input', id: 'authPassword2', type: 'password', autocomplete: 'new-password', placeholder: 'введите тот же пароль ещё раз' }) : null;
     var showPass = el('input', { type: 'checkbox', id: 'authShow' });
     showPass.addEventListener('change', function () { var t = showPass.checked ? 'text' : 'password'; passIn.type = t; if (pass2In) pass2In.type = t; });
@@ -257,7 +259,8 @@
     var form = el('form', { novalidate: true, id: 'authForm' },
       okBox, errBox, tipBox,
       el('div', { class: 'field' }, el('label', { for: 'authEmail', text: signup ? 'Ваша рабочая почта' : 'Почта' }), emailIn),
-      el('div', { class: 'field' }, el('label', { for: 'authPassword', text: signup ? 'Придумайте пароль' : 'Пароль' }), passIn),
+      el('div', { class: 'field' }, el('label', { for: 'authPassword', text: signup ? 'Придумайте пароль' : 'Пароль' }), passIn,
+        signup ? null : el('p', { class: 'auth-note', id: 'authPassNote', text: HINT_SIGNIN_PW })),
       signup ? el('div', { class: 'field' }, el('label', { for: 'authPassword2', text: 'Повторите пароль' }), pass2In) : null,
       el('label', { class: 'check', for: 'authShow' }, showPass, 'Показать пароль'),
       el('div', { class: 'btn-row' }, bSubmit),
@@ -298,6 +301,7 @@
     return el('div', { class: 'card auth-card', id: 'authCard', 'data-mode': mode },
       tabs,
       el('h2', { id: 'authTitle', text: signup ? 'Первый вход: создайте пароль' : 'Вход' }),
+      signup ? el('div', { class: 'auth-big-hint', id: 'authPassHint', role: 'note', text: HINT_SIGNUP_PW }) : null,
       steps, form);
   }
 

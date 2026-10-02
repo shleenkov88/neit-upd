@@ -219,6 +219,8 @@ summary { cursor: pointer; font-weight: 600; min-height: 36px; padding: 6px 0; }
 .auth-tab:hover { background: var(--primary-soft); }
 .auth-tab[aria-selected="true"] { background: var(--primary); color: var(--primary-text); }
 .auth-tab:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+.auth-big-hint { background: var(--warn-soft); color: var(--warn); border: 2px solid var(--warn-line); border-radius: var(--radius); padding: 14px 16px; margin: 8px 0 14px; font-size: 1.125rem; font-weight: 600; line-height: 1.4; }
+.auth-note { margin: 6px 0 0; font-size: .8125rem; color: var(--muted, inherit); line-height: 1.35; }
 .auth-steps { background: var(--primary-soft); border-radius: var(--radius); padding: 12px 14px 12px 2em; margin: 8px 0 14px; }
 .auth-steps li { margin: 6px 0; }
 .btn-big { min-height: 56px; font-size: 1.05rem; font-weight: 700; }

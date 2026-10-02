@@ -399,11 +399,18 @@ test('Экран входа: две вкладки, инструкция из 3 
   assert.ok(!/сообщите Андрею, какую почту/i.test(app), 'старый текст про список убран с экрана входа');
   assert.ok(!app.includes('Создать аккаунт'));
 });
+test('Экран входа: заметная подсказка, что пароль придумывается самостоятельно', () => {
+  const app = require('fs').readFileSync(__dirname + '/../js/app.js', 'utf8');
+  [ 'Пароль вы придумываете сами. Его никто не выдаёт и не присылает — просто введите любой новый пароль (минимум 6 символов) и запомните его.',
+    'Пароль — тот, который вы сами придумали при первой регистрации. Забыли — нажмите «Забыли пароль?»',
+    "placeholder: signup ? 'Придумайте пароль' : 'Пароль'", 'auth-big-hint', 'auth-note'
+  ].forEach(t => assert.ok(app.includes(t), 'нет текста: ' + t));
+});
 test('Версия сайта одинакова в index.html и firebase-config.js', () => {
   const cfg = require('fs').readFileSync(__dirname + '/../js/firebase-config.js', 'utf8');
   const html = require('fs').readFileSync(__dirname + '/../index.html', 'utf8');
   const v = (cfg.match(/NEIT_APP_VERSION = '([\d.]+)'/) || [])[1];
-  eq(v, '1.1.1');
+  eq(v, '1.1.2');
   eq((html.match(/name="app-version" content="([\d.]+)"/) || [])[1], v);
   (html.match(/\?v=[\d.]+/g) || []).forEach(m => eq(m, '?v=' + v));
 });
