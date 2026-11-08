@@ -73,7 +73,7 @@
       .replace(/[\s\u00a0\u202f]/g, '')
       .replace(/₽|руб(лей|\.)?|р\.?$/gi, '');
     var neg = false;
-    if (/^[-−–]/.test(s)) { neg = true; s = s.slice(1); }
+    if (/^[−–-]/.test(s)) { neg = true; s = s.slice(1); }
     if (!s) return null;
     var hasComma = s.indexOf(',') >= 0, hasDot = s.indexOf('.') >= 0;
     if (hasComma && hasDot) {
@@ -252,7 +252,7 @@
     var errors = {}, warnings = [];
     if (!isISODate(doc.date)) errors.date = 'Укажите дату УПД.';
     if (!cleanText(doc.number)) errors.number = 'Укажите номер УПД.';
-    if (!cleanText(doc.partner)) errors.partner = 'Укажите, кто контрагент (название организации).';
+    if (!cleanText(doc.partner)) errors.partner = 'Укажите контрагента (название организации).';
     // лимиты длины совпадают с правилами базы (firestore.rules)
     if (cleanText(doc.number).length > 100) errors.number = 'Номер УПД слишком длинный (не больше 100 знаков).';
     if (cleanText(doc.partner).length > 300) errors.partner = 'Название контрагента слишком длинное (не больше 300 знаков).';
@@ -266,7 +266,7 @@
     if (String(doc.inn == null ? '' : doc.inn).replace(/\s/g, '').length > 20) errors.inn = 'ИНН слишком длинный — проверьте, это должно быть 10 или 12 цифр.';
     var inn = checkInn(doc.inn);
     if (inn === 'format') warnings.push('ИНН должен состоять из 10 цифр (организация) или 12 цифр (ИП). Проверьте, пожалуйста.');
-    if (inn === 'checksum') warnings.push('Контрольная цифра ИНН не сходится — возможно, опечатка. Сохранить можно, но лучше проверить.');
+    if (inn === 'checksum') warnings.push('Контрольная цифра ИНН не совпадает — возможно, опечатка. Сохранить можно, но лучше проверить.');
     return { errors: errors, warnings: warnings };
   }
 
@@ -373,10 +373,7 @@
 
   return {
     COMPANY: COMPANY, RATES: RATES, DEFAULT_RATE: DEFAULT_RATE, PROFIT_TAX_PERCENT: PROFIT_TAX_PERCENT,
-    MONTHS_NOM: MONTHS_NOM, MONTHS_GEN: MONTHS_GEN,
-    rateInfo: rateInfo, ratePercent: ratePercent, rateLabel: rateLabel,
-    divRound: divRound, parseMoney: parseMoney, formatMoney: formatMoney, formatRub: formatRub,
-    csvMoney: csvMoney, inputMoney: inputMoney,
+    parseMoney: parseMoney, formatMoney: formatMoney, formatRub: formatRub, csvMoney: csvMoney, inputMoney: inputMoney,
     calcLine: calcLine, calcDoc: calcDoc,
     parseDate: parseDate, isISODate: isISODate, formatDate: formatDate, todayISO: todayISO,
     quarterOf: quarterOf, currentQuarter: currentQuarter, quarterRangeText: quarterRangeText, monthName: monthName,
